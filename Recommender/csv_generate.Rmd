@@ -1,0 +1,90 @@
+---
+title: "Data607 - Final Project - S3 Datasets"
+author: "Avery Davidowitz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+setwd("C:\\CUNY_SPS\\DATA607\\DATA607\\FinalProject")
+sys.source("C:\\CUNY_SPS\\DATA607\\env_var\\final_project_env.R", envir = knitr::knit_global())
+```
+
+## Import Libraries
+
+```{r}
+library(tidyverse)
+library(DBI)
+library(odbc)
+```
+
+
+## Connect to Database
+
+You must have RMySQL package installed.
+
+```{r}
+#Establish connection to DB
+con <- dbConnect(RMySQL::MySQL(), 
+                 dbname = "moviedb", 
+                 host = D607_FINAL_ENV$AWS_RDS_HOST, 
+                 port = 3306,
+                 user = D607_FINAL_ENV$AWS_RDS_USER_NAME,
+                 password = D607_FINAL_ENV$AWS_RDS_PW)
+```
+
+## Query Data
+
+```{r}
+ratings <- dbGetQuery(con, "SELECT userid, movieid, rating, timestamp FROM RATING")
+movies <- dbGetQuery(con, "SELECT movieid, year, rated FROM MOVIE")
+actors <- dbGetQuery(con, "SELECT movieid, actorid FROM moviedb.MOVIE_ACTOR")
+directors <- dbGetQuery(con, "SELECT movieid, directorid FROM moviedb.MOVIE_DIRECTOR")
+genres <- dbGetQuery(con, "SELECT movieid, genreid FROM moviedb.MOVIE_GENRE")
+languages <- dbGetQuery(con, "SELECT movieid, languageid FROM moviedb.MOVIE_LANGUAGE")
+```
+
+## Write CSVs
+
+```{r}
+# Interactions CSV
+
+# (requirements from AWS Personalize) Required fields USER_ID (string), ITEM_ID (string), TIMESTAMP (long), EVENT_TYPE (string and depending # on use case, Watch and Click event types)
+ratings$timestamp <- as.numeric(as.POSIXct(ratings$timestamp))
+min_time <- ratings |> dplyr::select(movieid, timestamp) |> 
+                       dplyr::group_by(movieid) |>
+                       dplyr::slice_min(n=1, order_by = timestamp)
+names(ratings) <- c("USER_ID", "ITEM_ID", "EVENT_VALUE", "TIMESTAMP")
+ratings <- dplyr::mutate(ratings, EVENT_TYPE = "Watch")
+readr::write_csv(ratings, paste0(getwd(), "\\interactions.csv"))
+```
+
+```{r}
+# Items CSV
+
+# (requirements from AWS Personalize) For fields with multiple values, including categorical metadata and impressions data, use the data type string and separate each value using the vertical bar, '|', character.
+actors <- actors |> group_by(movieid) |>
+                  summarize(ACTOR = str_c(actorid, collapse = "|"))
+directors <- directors |> group_by(movieid) |>
+                  summarize(DIRECTOR = str_c(directorid, collapse = "|"))
+genres <- genres |> group_by(movieid) |>
+                  summarize(GENRES = str_c(genreid, collapse = "|"))
+languages <- languages |> group_by(movieid) |>
+                  summarize(LANGUAGE = str_c(languageid, collapse = "|"))
+
+# join the dfs together 
+movies <- movies |> dplyr::left_join(actors, by="movieid") |>
+                    dplyr::left_join(directors, by="movieid") |>
+                    dplyr::left_join(genres, by="movieid") |>
+                    dplyr::left_join(languages, by="movieid") |>
+                    dplyr::left_join(min_time, by="movieid") |> #mandatory field
+                    dplyr::rename(ITEM_ID = "movieid", YEAR="year", RATED="rated") |>
+                    dplyr::filter(!is.na(GENRES)) |> # Can't be null in required GENRES Personalize schema field
+                    dplyr::rename(CREATION_TIMESTAMP=timestamp)
+  
+movies$RATED[movies$RATED %in% c("N/A","Not Rated", "Unrated")] <- NA #update missing rating entries uniformly
+
+readr::write_csv(movies, paste0(getwd(), "\\items.csv"), na = "")
+```
+

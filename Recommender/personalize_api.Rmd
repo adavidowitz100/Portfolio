@@ -1,0 +1,60 @@
+---
+title: "Data 607 - Final Project - Personalize Demo"
+author: "Avery Davidowitz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+sys.source("C:\\CUNY_SPS\\DATA607\\env_var\\final_project_env.R", envir = knitr::knit_global())
+```
+
+## Import Libraries
+```{r}
+library(paws)
+library(tidyverse)
+library(DBI)
+```
+
+
+
+## Database Connection
+
+You must have RMySQL package installed.
+
+```{r}
+#Establish connection to DB
+con <- dbConnect(RMySQL::MySQL(), 
+                 dbname = "moviedb", 
+                 host = D607_FINAL_ENV$AWS_RDS_HOST, 
+                 port = 3306,
+                 user = D607_FINAL_ENV$AWS_RDS_USER_NAME,
+                 password = D607_FINAL_ENV$AWS_RDS_PW)
+```
+
+## Connect to AWS Personalize API
+
+```{r}
+svc <- paws::personalizeruntime(
+  config = list(
+    credentials = list(
+      creds = list(
+        access_key_id = D607_FINAL_ENV$AWS_ACCESS_KEY_ID,
+        secret_access_key = D607_FINAL_ENV$AWS_SECRET_ACCESS_KEY
+      )
+    ),
+    endpoint = "https://personalize-runtime.us-east-1.amazonaws.com",
+    region = "us-east-1"
+    )
+)
+```
+
+```{r}
+like_this <- svc$get_recommendations(campaignArn = "arn:aws:personalize:us-east-1:650400453266:campaign/finalp_camp",
+  itemId = "86833",
+  numResults = 10
+  )
+```
+
+

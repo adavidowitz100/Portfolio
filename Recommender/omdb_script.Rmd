@@ -1,0 +1,115 @@
+---
+title: "Data 607 - Final Project - API Script"
+author: "Avery Davidowitz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+sys.source("C:\\CUNY_SPS\\DATA607\\env_var\\final_project_env.R", envir = knitr::knit_global())
+```
+
+## Import Libraries
+
+```{r}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(DBI)
+library(glue)
+```
+
+## Database Connection
+
+You must have RMySQL package installed.
+
+```{r}
+#Establish connection to DB
+con <- dbConnect(RMySQL::MySQL(), 
+                 dbname = "moviedb", 
+                 host = D607_FINAL_ENV$AWS_RDS_HOST, 
+                 port = 3306,
+                 user = D607_FINAL_ENV$AWS_RDS_USER_NAME,
+                 password = D607_FINAL_ENV$AWS_RDS_PW)
+```
+
+## Query
+```{r}
+movies <- dbGetQuery(con, "SELECT * FROM MOVIE WHERE rated is null LIMIT 200")
+```
+
+
+## Load API Data
+```{r}
+for (row in 1:nrow(movies)) {movie <- movies[row,]
+    imdbid <- movie[1, 2]
+    movieid <- movie[1, 1]
+    r <- GET(stringr::str_c('https://www.omdbapi.com/?apikey=', D607_FINAL_ENV$OMDB_API_KEY,"&i=",imdbid))
+    if (http_status(r)$category == "Success"){
+        json <- httr::content(r, "text")
+        api_data <- jsonlite::fromJSON(json, flatten = TRUE)
+        
+        # load rated into db
+        rated <- api_data$Rated
+        sql <- glue_sql("UPDATE `MOVIE` SET `rated` = {rated} WHERE `movieid` = {movieid}", .con = con)
+        dbSendStatement(con, sql)
+        
+        # load actors into db
+        actor <- api_data$Actors |> 
+                 as.list() |>
+                 data.frame() |>
+                 dplyr::rename(name=1) |>
+                 tidyr::separate_rows(name, sep = ",")
+        actor$name <- stringr::str_trim(actor$name)
+        actor$name <- stringr::str_replace_all(actor$name,"[\'\"]","")
+        
+        for (act in 1:nrow(actor)){
+          actorid_db <- odbc::dbGetQuery(con, glue_sql("SELECT actorid FROM moviedb.ACTOR WHERE name = {actor$name[act]}", .con=con))
+          if (nrow(actorid_db) == 0){
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO ACTOR (name) VALUES ({actor$name[act]})", .con=con))
+            actorid_db <- odbc::dbGetQuery(con, glue_sql("SELECT actorid FROM moviedb.ACTOR WHERE name = {actor$name[act]}", .con=con))
+          }
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO MOVIE_ACTOR (movieid, actorid) VALUES ({movieid},{actorid_db})", .con=con))
+        }
+        
+         # load directors into db
+        director <- api_data$Director |> 
+                 as.list() |>
+                 data.frame() |>
+                 dplyr::rename(director=1) |>
+                 tidyr::separate_rows(director, sep = ",")
+        director$director <- stringr::str_trim(director$director)
+        director$director <- stringr::str_replace_all(director$director,"[\'\"]","")
+        
+        for (direct in 1:nrow(director)){
+         directorid_db <- odbc::dbGetQuery(con, glue_sql("SELECT directorid FROM moviedb.DIRECTOR WHERE director =           {director$director[direct]}", .con = con))
+          if (nrow(directorid_db) == 0){
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO DIRECTOR (director) VALUES ({director$director[direct]})", .con=con))
+            directorid_db <- odbc::dbGetQuery(con, glue_sql("SELECT directorid FROM moviedb.DIRECTOR WHERE director =           {director$director[direct]}", .con = con)) 
+          }
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO MOVIE_DIRECTOR (movieid, directorid) VALUES ({movieid},{directorid_db})", .con=con))
+        }
+        
+                 # load languages into db
+        language <- api_data$Language |> 
+                 as.list() |>
+                 data.frame() |>
+                 dplyr::rename(language=1) |>
+                 tidyr::separate_rows(language, sep = ",")
+        language$language <- stringr::str_trim(language$language)
+        language$language <- stringr::str_replace_all(language$language,"[\'\"]","")
+        
+        for (lang in 1:nrow(language)){
+         languageid_db <- odbc::dbGetQuery(con, glue_sql("SELECT languageid FROM moviedb.LANGUAGE WHERE language =           {language$language[lang]}", .con = con)) 
+          if (nrow(languageid_db) == 0){
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO LANGUAGE (language) VALUES ({language$language[lang]})", .con=con))
+            languageid_db <- odbc::dbGetQuery(con, glue_sql("SELECT languageid FROM moviedb.LANGUAGE WHERE language =           {language$language[lang]}", .con = con))
+          }
+            DBI::dbSendStatement(con, glue_sql("INSERT INTO MOVIE_LANGUAGE (movieid, languageid) VALUES ({movieid},{languageid_db})", .con=con))
+        }
+    }
+    print(paste(row,"of", nrow(movies), "Movie titled", movie["title"], "loaded successfully"))
+}    
+```
+
